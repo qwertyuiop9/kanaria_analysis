@@ -1,0 +1,635 @@
+---
+title: "Kanaria Analysis"
+author: "Andrea Vendrame - 134061"
+date: "1/27/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Importing the necessary libraries
+
+```{r}
+{echo = FALSE}
+library(tidyverse)
+library(tidygraph)
+library(rjson)
+library(lubridate)
+```
+
+Importing the extracted data from the Telegram group called Kanaria and printing an example message.
+
+```{r}
+raw_data <- fromJSON(file = 'result.json')
+# Getting data for future uses
+messages <- raw_data$messages
+# Print an example message from the raw data previously imported
+example_message <- messages[[111]]
+print(example_message)
+```
+
+Elaborating data to make the analysis.
+
+```{r}
+# Preparing vectors for biulding a clean dataframe
+
+l_id <- list()
+l_type <- list()
+l_date <- list()
+l_from <- list()
+l_from_id <- list()
+l_media_type <- list()
+l_actor <- list()
+l_actor_id <- list()
+l_action <- list()
+l_text <- list()
+l_replies <- list()
+
+
+for (i in 1:length(messages)) {
+    l_id[[i]] <- messages[[i]]$id
+    l_type[[i]] <- messages[[i]]$type
+    l_date[[i]] <- messages[[i]]$date
+    l_from[[i]] <- messages[[i]]$from
+    l_from_id[[i]] <- messages[[i]]$from_id
+    l_media_type[[i]] <- messages[[i]]$media_type
+    l_actor[[i]] <- messages[[i]]$actor
+    l_actor_id[[i]] <- messages[[i]]$actor_id
+    l_action[[i]] <- messages[[i]]$action
+    l_text[[i]] <- messages[[i]]$text
+    l_replies[[i]] <- ifelse (is.null(messages[[i]]$reply_to_message_id), -1, messages[[i]]$reply_to_message_id)
+}
+```
+
+Substituting with -1 value the NULL value in the reply so the list will be used without problems in a dataframe
+
+```{r}
+l_reply <- lapply(l_replies, function(x) ifelse (length(x) == 0, -1, x))
+l_from <- lapply(l_from, function(x) ifelse (length(x) == 0, 'SYSTEM', x))
+l_from_id <- lapply(l_from_id, function(x) ifelse (length(x) == 0, -1, x))
+```
+
+Creating the base dataframe to analyze.
+Il will contain these fields:
+
+1. message_id: ID of the message sent
+2. from: name of the user who sent the message
+3. from_id: id in Telegram format of the user who sent the message
+4. reply: the id of the message that has been replied
+5. date: time when the messagge has been sent in the group
+
+```{r}
+#
+simple_data <- data.frame(message_id = unlist(l_id), from = unlist(l_from), from_id = unlist(l_from_id), date = unlist(l_date), reply = unlist(l_reply))
+simple_data
+
+```
+
+Gathering info about the time when the messages have been sent
+
+```{r}
+simple_data <- separate(simple_data, date, into = c("year", "month", "day_hour_time"), sep = "-", convert = TRUE)
+simple_data <- separate(simple_data, day_hour_time, into = c("day", "time"), sep = "T", convert = TRUE)
+simple_data <- separate(simple_data, time, into = c("hour", "minute", "second"), sep = ":", convert = TRUE)
+```
+
+Print the messages distribution over the lifetime of the Kanaria channel
+
+```{r}
+messages_sent_over_time <- tibble(simple_data) %>%
+	mutate(timestamp = make_datetime(year, month, day, hour, minute, second))
+
+messages_sent_over_time %>%
+      ggplot(aes(timestamp)) +
+      geom_freqpoly(binwidth = 86400) +
+      geom_hline(yintercept = 1000, linetype = "dashed", color = "red") +
+    labs(
+    title = "Messages distribution over time",
+    subtitle = "Messages sent between March 2021 and January 2022",
+    caption = "Messages traffic",
+    x = "Time",
+    y = "Messages sent per day"
+  ) +
+  theme_classic()
+```
+
+The graphic above shows that there are some picks in the messages sent over time.
+The red dotted line has been set up on 500 messages per day and has been done a research on Twitter about the events that could correspond to the highlihted picks.
+
+For the aim of our analysis the multiple picks in in July has been compressed in 1 single event and the research has outcome these results.
+
+```{r}
+highlighted_events <- simple_data %>% select(year, month, day) %>% group_by(year, month, day) %>% summarise(count = n())
+highlighted_events <- highlighted_events %>% mutate(events = unlist(lapply(count, function(x) ifelse (x >= 1000, 1, 0))))
+new_data <- inner_join(messages_sent_over_time, highlighted_events)
+
+# Library for plotting better the labels
+library(ggrepel)
+
+
+# Twitter posts dates
+
+descriptions = c("Yuletide Christmas", "Hou-Ou", "Protocol explanation", "End Hou-Ou")
+
+b <- head(messages_sent_over_time %>% filter(day == 24, month == 6), 1 )
+a <- head(messages_sent_over_time %>% filter(day == 21, month == 12), 1 )
+c <- head(messages_sent_over_time %>% filter(day == 20, month == 6), 1 )
+d <- head(messages_sent_over_time %>% filter(day == 29, month == 9), 1 )
+f <- c(a$timestamp, b$timestamp, c$timestamp, d$timestamp)
+
+twitter_events <- data.frame(description = descriptions, dates = f)
+
+new_data %>%
+  rename(interesting = events) %>%
+      ggplot(aes(timestamp)) +
+      geom_point(mapping = aes(x = timestamp, y = count, colour = interesting), size = 0.01, show.legend = FALSE) +
+      geom_line(mapping = aes(x = timestamp, y = count)) +
+      geom_segment(data = twitter_events, mapping = aes(x = dates, y= 3000, xend = f, yend = 0), size = 0.2, colour = "blue") +
+      geom_label_repel(data = twitter_events, mapping = aes(x = dates, y = c(3000, 2500, 3000, 3000)), label = descriptions) +
+    labs(
+    title = "Messages distribution over time",
+    subtitle = "Messages sent between March 2021 and December 2021",
+    caption = "Messages traffic",
+    x = "Time",
+    y = "Messages sent per day"
+  ) +
+  theme_classic()
+
+
+```
+The analysis show us that the high traffic of messages correspods to some particular events.
+These events are rispectively:
+
+1) Protocol explanation: in this post the Kanaria team has explained, in a pretty detailed way, how its protocol works with some hints about the future development plan. This has generated a huge amount of questions in the group.
+
+2) Hou-Ou: this post has been an explanation about the fact that the unsold eggs will be burned. The mechanism wasn't clear to the users and so the high number of messages followed by other questions about the protocol.
+
+3) End Hou-Ou: a reminder of the end of this event. It has arised some questions about how the team will handle the unsold eggs. People are indeed lazy and they have waited for asking a little time before the deadline.
+
+4) Yuletide Christmas: an event in which the team has dropped some Mistery Boxes which contain equippable NFTs. The event has last for 2 weeks and has generate a huge onboarding of new users so more traffic also on the Kanaria group.
+
+```{r}
+# Importing the libraries for graph analysis
+library(ggraph)
+library(tidygraph)
+library(igraph)
+library(dplyr)
+```
+
+After explaining the messages picks in the group over time we will move our focus to the relationships so analyzing the replies between the users searching for the costitution of some sort of internal communities.
+
+```{r}
+{echo = FALSE}
+# Getting the data to compose the graph and deleting messages from the System and messages that are no real replies
+
+best_user_map <- simple_data %>% select(from, from_id) %>% distinct()
+best_user_map$graph_id <- 1:length(best_user_map$from)
+
+# Some functions to make life easier
+getGraphIdFromUser <- function(user_id) {
+  r  <- best_user_map[(best_user_map$from_id == user_id),] %>% select(graph_id)
+  return(unlist(r))
+}
+
+getUserFromGraphId <- function(id) {
+  r  <- best_user_map[(best_user_map$graph_id == id),] %>% select(from_id)
+  return(unlist(r))
+}
+
+getUserNameFromGraphId <- function(id) {
+  r  <- best_user_map[(best_user_map$graph_id == id),] %>% select(from)
+  return(unlist(r))
+}
+
+# Removing invalid messages (replies to and from the SYSTEM)
+graph_data <- data.frame(from_message_id = simple_data$message_id, from_person_id = simple_data$from_id, to_message_id = simple_data$reply) %>% filter(from_person_id != -1, to_message_id != -1)
+
+m <- graph_data %>% select(from_message_id, from_person_id) %>% rename(to_message_id = from_message_id) %>% rename(to_person_id = from_person_id)
+
+edges <- inner_join(graph_data, m)
+
+from <- unlist(lapply(edges$from_person_id, getGraphIdFromUser))
+to <- unlist(lapply(edges$to_person_id, getGraphIdFromUser))
+
+# Getting edges of the replies graph
+detailed_edges <- edges %>% mutate(from, to) %>% select(from, to, everything())
+head(detailed_edges)
+
+```
+
+The dataframe above shows the replies between users in the group. It uses the column from_user and to_user to short the name of the users in the graph. These data will be used to discover if there are significant relationships in the group.
+The aim is to find communities in the graph that are filtered basing the research on the number of replies and how strong are the communications between members of Kanaria.
+
+```{r}
+#Printing the reply graph in its noisy form
+g <- graph_from_data_frame(detailed_edges, directed = TRUE)
+g_back <- g
+ggraph(g_back) + 
+     geom_edge_link() + 
+     geom_node_point(repel=TRUE) + 
+     labs(title = "Replies graph with undirected edges.",
+          subtitle = "1057 nodes, 9535 edges",
+         y = "",
+         x = "") +
+    theme(legend.position = "none")
+```
+We can observe that the graph has at a first glance some small "communities" made of 2-3 people. Despite them can be friendship relations they are not considered too important respect to the global community.
+We have to go deep and find more significant relations in the next steps.
+```{r}
+# Deleting self-loops (they are not important for community relations)
+e <- detailed_edges %>% filter(from_user != to_user)
+
+# Adding In and Out Degree to nodes
+V(g)$in_degree <- degree(g, mode = "in")
+V(g)$out_degree <- degree(g, mode = "out")
+V(g)$total_degree <- degree(g, mode = "total")
+vertexes <- unlist(lapply(V(g), getUserNameFromGraphId))
+
+# Getting and sorting the more active community members
+user_total_degree <- data.frame(user_id = V(g)$name, total_degree = V(g)$total_degree)
+user_total_degree <- user_total_degree[order(user_total_degree$total_degree, decreasing = TRUE),] %>% mutate(Overlinked = ifelse(total_degree > 233, 1, 0))
+
+ggplot(user_total_degree, aes(x=1:length(user_id), y=total_degree, color = Overlinked)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal(
+  base_size = 11) +
+  labs(
+    title = "Distribution of the total-degree over the Kanaria community members",
+    y = "Total Degree",
+    x = "Community members"
+  ) 
+```
+The graph above show that there are 5 outliers, that is 5 people that have a very large total-degree compared to the others.
+The last one of this 5 people has a total-degree of 455, that is almost 2 times the value of the 6th person (233).
+Below the names of this "Top 10" total-degree users:
+```{r}
+a <- head(user_total_degree, 10)
+(data.frame(username = unlist(lapply(a$user_id, getUserNameFromGraphId)), total_degree = a$total_degree))
+
+```
+After some inspection I've found these meaninful explanations for the above result.
+1) Christina Miyar (Velinova) is the head of the marketing team. She is online almost everytime.
+2) Bruno (Will never DM you) is the cheif of the Kanaria project, so he is often online for doubt and to get feedback.
+3) Yuri (Too busy to respond this week) is the main developer.
+4) sT Lopez is a very active community member.
+5) Smokey - Meta \U0001f47d, like st Lopez, is a very active community member.
+```{r}
+g1 <- delete_vertices(g, V(g)$in_degree < mean(V(g)$in_degree)/4)
+g2 <- delete_vertices(g1, V(g1)$out_degree < mean(V(g1)$out_degree)/4)
+
+total_degree <- V(g2)$in_degree + V(g2)$out_degree
+isBig <- ifelse(V(g2)$total_degree > 400, 1, 0)
+
+ggraph(g2) + 
+     geom_edge_link() + 
+     geom_node_point(aes(size = total_degree, color = isBig)) +
+    labs(
+    title = "Replies between community members in an undirected graph",
+    subtitle = "5 nodes are the overlinked ones which have a total-degree too much above the mean") +
+    theme(legend.position = "none")
+```
+In the graph above we can see that the top 5 users with very high total-degree are disturbing the real community network.
+What we are searching is a smaller community which is highly tighted and in this way we try to discover it by removing this popular nodes getting the graph below.
+```{r}
+g3 <- delete_vertices(g2, V(g2)$total_degree %in% head(user_total_degree$total_degree, 5))
+
+total_degree <- V(g3)$total_degree
+
+# There are 6 nodes which haven't been removed so I'll remove them manually (they are not part of the big connected component)
+blacklist <- c("269", "146", "1276", "1765", "1848", "2226")
+
+g3 <- delete.vertices(g3, V(g3)$name %in% blacklist)
+ggraph(g3) + 
+     geom_edge_link() + 
+     geom_node_point(aes(size = total_degree, color = total_degree)) + 
+    labs(
+    title = "Replies between community members without the top 5 users per 'total-degree'") 
+```
+Now the network is more balanced and we can start to test out hyphotesis: find a small tight community or more.
+```{r}
+# setting theme_graph 
+set_graph_style()
+
+# Printing page rank centrality and betweenness to show the relations between most active community members
+getRoundedBetweenness <- function(value) {
+  if (value <= 20) {
+    return(20)
+  } else {
+    if (value > 20 && value <= 40) {
+      return(40) 
+    } else {
+      if (value > 40 && value <= 60) {
+      return(60) 
+      } else {
+      return(80)
+      }
+    }
+  }
+}
+
+g4 <- graph %>% 
+  activate(edges) %>%
+  mutate(betweenness = centrality_edge_betweenness()) %>%
+  mutate(Betweenness = unlist(lapply(betweenness, getRoundedBetweenness)))
+
+g4 %>% 
+  activate(nodes) %>%
+  mutate(pagerank = centrality_pagerank()) %>%
+  ggraph() +
+  geom_edge_link(aes(alpha = Betweenness)) +
+  geom_node_point(aes(size = pagerank, colour = pagerank)) + 
+  scale_color_gradient(guide = 'legend') +
+    labs(
+    title = "Replies  without the top 5 users per 'total-degree'",
+    subtitle = "highlighting the edge betweenness and the PageRank centrality for nodes") 
+```
+Now we will remove the nodes that haven't a high value for the PageRank algorithm in order to find the core community of the Kanaria group.
+```{r}
+# Removing the nodes with no high values of PageRank
+pagerank_more_zero_two <- g4 %>% 
+  activate(nodes) %>%
+  mutate(pagerank = centrality_pagerank())
+pagerank_more_zero_two <- delete_vertices(pagerank_more_zero_two, V(pagerank_more_zero_two)$pagerank < 0.02)
+
+pagerank_more_zero_two <- as_tbl_graph(pagerank_more_zero_two)
+pagerank_more_zero_two %>%
+  ggraph() +
+  geom_edge_link(aes(alpha = betweenness)) +
+  geom_node_point(aes(size = pagerank, colour = pagerank)) + 
+  # discrete colour legend
+  scale_color_gradient(guide = 'legend') +
+  labs(
+    title = "Core community for PageRank",
+    subtitle = "with a value for the PageRank such that >= 0,02")
+```
+We have found a strong connected "core-community" that is important for itself and for the whole Kanaria group.
+Now we will explore the information that pass along this community by using some functions of text mining.
+```{r}
+core_members <- user_total_degree[(user_total_degree$user_id %in% core_members_id),]
+useful_ids <- core_members$user_id
+useful_ids <- strtoi(useful_ids)
+useful_names <- list()
+for (i in 1:length(useful_ids)) {
+  useful_names[i] <- getUserNameFromGraphId(useful_ids[i])
+}
+names <- unlist(useful_names)
+core_members$user_names <- names
+(core_members <- core_members %>% select(user_names, total_degree, user_id))
+```
+```{r}
+core_edges <- detailed_edges[(detailed_edges$from %in% core_members$user_id) ,] %>%
+  select(from, to, from_person_id)
+core_edges <- core_edges[(core_edges$to %in% core_members$user_id) ,]
+
+g <- detailed_edges[(detailed_edges$from != detailed_edges$to),]
+g <-graph_from_data_frame(detailed_edges, directed = FALSE)
+V(g)$in_degree <- degree(g, mode = "in")
+V(g)$out_degree <- degree(g, mode = "out")
+V(g)$total_degree <- degree(g, mode = "total")
+
+g <- delete_vertices(g, V(g)$total_degree >= 455)
+g <- delete_vertices(g, V(g)$in_degree < 15)
+g <- delete_vertices(g, V(g)$out_degree < 15)
+
+c <- membership(cluster_leading_eigen(g))
+V(g)$member <- c
+
+g %>%
+  ggraph() +
+  geom_edge_link() +
+  geom_node_point(aes(size = 1, colour = member))  +
+  facet_nodes(~member) +
+  labs(title = "Communities found with 'cluster_leading_eigen' algorithm") +
+  theme(legend.position = "none")
+  
+```
+The algorithm for the community detection has detected 11 communities. We can discard the 2 communities that have only 1 member because they are not interesting at all.
+```{r}
+c9 <- delete_vertices(g, V(g)$member != 9)
+c9_id <- strtoi(V(c9)$name)
+getUserNameFromGraphId(c9_id)
+
+c8 <- delete_vertices(g, V(g)$member != 8)
+c8_id <- strtoi(V(c8)$name)
+getUserNameFromGraphId(c8_id)
+
+data.frame(single_member = c(c8_id, c9_id), username = c(getUserNameFromGraphId(c8_id), getUserNameFromGraphId(c9_id)))
+
+# Some modularity measures
+modularity(cluster_leading_eigen(g))
+modularity(cluster_label_prop(g))
+```
+Above the 2 single member communities with their member username and id in the graph.
+```{r}
+gg <- delete_vertices(g, !(V(g)$name %in% core_members$user_id))
+V(gg)$username <- names
+gg %>%
+  ggraph() +
+  geom_edge_link(aes(alpha = E(pagerank_more_zero_two)$betweenness)) +
+  geom_node_text(aes(label = V(gg)$username), vjust = 2) +
+  geom_node_point(aes(size = 1), color = V(gg)$member, shape = 1) +
+  labs( title = "Distribution of the core users along the detected communities") +
+  theme(legend.position = "none")
+```
+As shown above we have found that the top 12 users for the PageRank algorithm belong to 4 communities of the ones found with the clustering algorithm.
+This is pretty interesting because the users are not all in a single community suggesting that they could be the leaders of these sub communities.
+If we relax the constraint of the PageRank previously set to 0,02 (minimum) to maybe 0,015 we could find the leaders of the other 2 sub-communities (we are not considering the communities made by up to 2 people, so 3 are not considered).
+```{r}
+x <- V(g)$member
+V(g)$highligthed <- ifelse(V(g)$name %in% core_members$user_id, 2, 1)
+g %>%
+  ggraph() +
+  geom_edge_link() +
+  geom_node_point(aes(size = V(g)$highligthed, colour = V(g)$highligthed))  +
+  facet_nodes(~member) +
+  labs(title = "Communities found with 'cluster_leading_eigen' algorithm") +
+  theme(legend.position = "none")
+```
+As we can see above the core members are pretty distributed in the different communities.
+The 5th community and the 6th one don't have core members in, but probably as stated above reducing the value to filter by the PageRank algorithm we can find some "sub-core users" also in them.
+```{r}
+library(tidytext)
+library(janeaustenr)
+
+users_to <- list()
+for (i in 1:length(l_from_id)) {
+  users_to[i] <- getGraphIdFromUser(l_from_id[[i]])
+}
+user_to <- unlist(users_to)
+```
+In the following section we will analize the messages between some important community members and in particular between 3 interesting couples of the core members.
+The couple of people to analyze are respectively: 
+
+1) MariO and Zach James
+2) MariO and HayClimpson
+3) Zach James and Jay Carter.
+
+These couple are interesting because 2 are cross community, the 2nd and the 3rd and the other is a "insider couple".
+We will analyze the text of the messages in order to find interesting words that carry some meaning for the project.
+```{r}
+# Getting messages between Mario (173) and Zach James (98)
+mario_zach_text <- list()
+index <- 1
+for (i in 1:length(users_to)) {
+  if (user_to[i] == 98 || user_to[i] == 173) {
+      mario_zach_text[index] <- l_text[i]
+  index <- index + 1
+  }
+}
+
+message_text <- unlist(mario_zach_text, recursive = TRUE)
+message_number <- length(message_text)
+t <- tibble(text = message_text, message_number = 1:message_number)
+
+mario_zach_words <- t %>%
+  unnest_tokens(word, text) %>%
+  count(message_number, word, sort = TRUE) %>%
+  ungroup()
+
+total_words_mario_zach <- mario_zach_words %>% 
+  group_by(word) %>% 
+  summarize(total = sum(n))
+
+total_words_mario_zach <- total_words_mario_zach[order(total_words_mario_zach$total, decreasing = TRUE),]
+total_words_mario_zach <- total_words_mario_zach[!(total_words_mario_zach$word %in% stop_words$word),]
+
+ggplot(total_words_mario_zach, aes(x=1:length(total_words_mario_zach$word), y=total)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal(
+  base_size = 11) +
+  labs(
+    title = "Most frequently used words between MariO and Zach James",
+    x = "Words number",
+    y = "Frequency"
+  )
+```
+
+
+
+```{r}
+# Getting messages between Mario (173) and HayClimpson (665)
+mario_hay_text <- list()
+index <- 1
+for (i in 1:length(users_to)) {
+  if (user_to[i] == 665 || user_to[i] == 173) {
+      mario_hay_text[index] <- l_text[i]
+  index <- index + 1
+  }
+}
+
+message_text <- unlist(mario_hay_text, recursive = TRUE)
+message_number <- length(message_text)
+t2 <- tibble(text = message_text, message_number = 1:message_number)
+
+mario_hay_words <- t2 %>%
+  unnest_tokens(word, text) %>%
+  count(message_number, word, sort = TRUE) %>%
+  ungroup()
+
+total_words_mario_hay <- mario_hay_words %>% 
+  group_by(word) %>% 
+  summarize(total = sum(n))
+
+total_words_mario_hay <- total_words_mario_hay[order(total_words_mario_hay$total, decreasing = TRUE),]
+total_words_mario_hay <- total_words_mario_hay[!(total_words_mario_hay$word %in% stop_words$word),]
+
+ggplot(total_words_mario_hay, aes(x=1:length(total_words_mario_hay$word), y=total)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal(
+  base_size = 11) +
+  labs(
+    title = "Most frequently used words between MariO and HayClimpson",
+    x = "Words number",
+    y = "Frequency"
+  )
+
+head(total_words_mario_hay, 10)
+
+```
+
+
+```{r}
+zach_jay_text <- list()
+index <- 1
+for (i in 1:length(users_to)) {
+  if (user_to[i] == 646 || user_to[i] == 98) {
+      zach_jay_text[index] <- l_text[i]
+  index <- index + 1
+  }
+}
+
+message_text <- unlist(zach_jay_text, recursive = TRUE)
+message_number <- length(message_text)
+t3 <- tibble(text = message_text, message_number = 1:message_number)
+
+zach_jay_words <- t3 %>%
+  unnest_tokens(word, text) %>%
+  count(message_number, word, sort = TRUE) %>%
+  ungroup()
+
+total_words_zach_jay <- zach_jay_words %>% 
+  group_by(word) %>% 
+  summarize(total = sum(n))
+
+total_words_zach_jay <- total_words_zach_jay[order(total_words_zach_jay$total, decreasing = TRUE),]
+total_words_zach_jay <- total_words_zach_jay[!(total_words_zach_jay$word %in% stop_words$word),]
+
+ggplot(total_words_zach_jay, aes(x=1:length(total_words_zach_jay$word), y=total)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal(
+  base_size = 11) +
+  labs(
+    title = "Most frequently used words between Zach James and Jay Carter",
+    x = "Words number",
+    y = "Frequency"
+  )
+
+head(total_words_zach_jay, 10)
+```
+```{r}
+(result <- data.frame(jay_zach = head(total_words_zach_jay$word, 10), 
+                     zach_mario = head(total_words_mario_zach$word, 10),
+                     mario_hay = head(total_words_mario_hay$word, 10)))
+```
+The dataframe above shows the top 10 words for the considered core couples.
+The couple of people are composed as follow:
+
+1) MariO and HayClimpson
+2) MariO and Zach James
+3) Zach James and Jay Carter.
+
+From the top words used by these core-community members we can deduce that the following concept are important:
+
+1) bold
+2) rmrk
+3) fairdrop
+4) ksm
+5) birds
+6) egg
+7) kanaria
+
+From my experience in this project I can state that the first world is not important and has no meaning in this context.
+The other words instead are very important because Kanaria is the name of the group and in particular of the NFT collection buyable with the crypto KSM (Kusama).
+RMRK is the name of the team that has developed this collection which is composed from birds that have hatched from eggs in a special date around the Hou-Ou (remember the first part of the analysy of the events).
+Moreover the fairdrop is the way that the team has choosen to distribute the project tokens and Kucoin has been the exchange which has listed for the first time the RMRK token.
+
+
+CONCLUSION
+
+The analysis has been successfull becasue:
+
+1) A big part of the core community members have been discovered through a graph analysis and with the help of the PageRank centrality measure.
+2) The discovered people seems to be the reference point (a sort of leaders) for the sub-communities found with the clustering community detection.
+3) The messagges the run between 2 core community members has a lot of meaning for the project concepts and the updates themselves.
+
+OTHER POSSIBLE STEPS
+The analysis can go deeper by analyzing the messages beetween core members rispect to the messages the run between non core members.
+Moreover we can try by decreasing the PageRank threashold set for this specific case in order to find the other leader of the other communities found with the community detection algorithm.
